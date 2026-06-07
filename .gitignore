@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Runtime
+.venv/
+data/
+*.db
+*.sqlite
+roulette.log
+
+# Local secrets
+.env
+!/.env.example

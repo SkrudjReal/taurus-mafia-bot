@@ -1,0 +1,33 @@
+[project]
+name = "taurus-mafia-bot"
+version = "0.2.0"
+description = "Modern aiogram 3 Taurus Mafia economy/shop bot"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.22.0,<4.0.0",
+    "aiosqlite>=0.21.0",
+    "pydantic-settings>=2.10.0",
+    "python-dotenv>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
+]
+
+[project.scripts]
+taurus-mafia-bot = "taurus_mafia_bot.main:run"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+testpaths = ["tests"]
