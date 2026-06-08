@@ -11,6 +11,8 @@ DEFAULT_LOG_CHAT_ID = -1003333957923
 DEFAULT_LOG_THREAD_ID = 2215
 DEFAULT_ROULETTE_LOG_CHAT_ID = -1003333957923
 DEFAULT_ROULETTE_LOG_THREAD_ID = 18657
+DEFAULT_BONUS_REQUEST_LOG_CHAT_ID = -1003333957923
+DEFAULT_BONUS_REQUEST_LOG_THREAD_ID = 1
 
 
 class Settings(BaseSettings):
@@ -24,8 +26,18 @@ class Settings(BaseSettings):
     log_thread_id: int | None = Field(default=DEFAULT_LOG_THREAD_ID, alias="LOG_THREAD_ID")
     roulette_log_chat_id: int | None = Field(default=DEFAULT_ROULETTE_LOG_CHAT_ID, alias="ROULETTE_LOG_CHAT_ID")
     roulette_log_thread_id: int | None = Field(default=DEFAULT_ROULETTE_LOG_THREAD_ID, alias="ROULETTE_LOG_THREAD_ID")
+    bonus_request_log_chat_id: int | None = Field(default=DEFAULT_BONUS_REQUEST_LOG_CHAT_ID, alias="BONUS_REQUEST_LOG_CHAT_ID")
+    bonus_request_log_thread_id: int | None = Field(default=DEFAULT_BONUS_REQUEST_LOG_THREAD_ID, alias="BONUS_REQUEST_LOG_THREAD_ID")
 
-    @field_validator("log_chat_id", "log_thread_id", "roulette_log_chat_id", "roulette_log_thread_id", mode="before")
+    @field_validator(
+        "log_chat_id",
+        "log_thread_id",
+        "roulette_log_chat_id",
+        "roulette_log_thread_id",
+        "bonus_request_log_chat_id",
+        "bonus_request_log_thread_id",
+        mode="before",
+    )
     @classmethod
     def empty_string_means_none(cls, value):
         if value == "":

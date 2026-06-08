@@ -1,14 +1,16 @@
 import sqlite3
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
+from aiogram_dialog import ShowMode, StartMode
+
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.db import Database
-from taurus_mafia_bot.routers.admin import parse_reset_spins_target
 from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_user_mention
-from taurus_mafia_bot.routers.shop import notify_admins
-from taurus_mafia_bot.routers.start import TopDialogSG, format_taurons_top, split_text_by_lines
+from taurus_mafia_bot.routers.shop import notify_admins, send_bonus_use_request
+from taurus_mafia_bot.routers.start import TopDialogSG, format_taurons_top, split_text_by_lines, start_top_dialog
 from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 from taurus_mafia_bot.services.missions import MissionService
 from taurus_mafia_bot.services.roulette import RouletteService, roulette_info_text
@@ -26,9 +28,35 @@ class FixedRng:
 class FakeBot:
     def __init__(self) -> None:
         self.messages = []
+        self.photos = []
+        self.documents = []
 
     async def send_message(self, *args, **kwargs):
         self.messages.append((args, kwargs))
+
+    async def send_photo(self, *args, **kwargs):
+        self.photos.append((args, kwargs))
+
+    async def send_document(self, *args, **kwargs):
+        self.documents.append((args, kwargs))
+
+
+class FakeTopDialogBgManager:
+    def __init__(self) -> None:
+        self.starts = []
+
+    async def start(self, *args, **kwargs):
+        self.starts.append((args, kwargs))
+
+
+class FakeTopDialogManager:
+    def __init__(self) -> None:
+        self.bg_calls = []
+        self.bg_manager = FakeTopDialogBgManager()
+
+    def bg(self, *args, **kwargs):
+        self.bg_calls.append((args, kwargs))
+        return self.bg_manager
 
 
 async def seed(db: Database, user_id: int, taurons: int = 0, taurcoins: int = 0, username: str = "user", full_name: str | None = None) -> None:
@@ -163,6 +191,33 @@ def test_top_dialog_pagination_does_not_split_html_mention_tags() -> None:
 
 
 @pytest.mark.asyncio
+async def test_top_dialog_starts_new_thread_specific_background_stack() -> None:
+    message = SimpleNamespace(
+        chat=SimpleNamespace(id=-100123),
+        from_user=SimpleNamespace(id=777),
+        message_thread_id=42,
+    )
+    manager = FakeTopDialogManager()
+
+    await start_top_dialog(cast(Any, message), cast(Any, manager), "top text")
+
+    assert len(manager.bg_calls) == 1
+    _, bg_kwargs = manager.bg_calls[0]
+    assert bg_kwargs["chat_id"] == -100123
+    assert bg_kwargs["user_id"] == 777
+    assert bg_kwargs["thread_id"] == 42
+    assert bg_kwargs["stack_id"]
+    assert len(manager.bg_manager.starts) == 1
+    start_args, start_kwargs = manager.bg_manager.starts[0]
+    assert start_args == (TopDialogSG.TEXT,)
+    assert start_kwargs == {
+        "mode": StartMode.NORMAL,
+        "show_mode": ShowMode.SEND,
+        "data": {"top_text": "top text"},
+    }
+
+
+@pytest.mark.asyncio
 async def test_top_taurons_escapes_names(tmp_path):
     db = Database(tmp_path / "bot.db")
     await db.migrate()
@@ -183,6 +238,8 @@ def test_settings_default_log_topics_match_legacy_bot_py() -> None:
     assert settings.log_thread_id == 2215
     assert settings.roulette_log_chat_id == -1003333957923
     assert settings.roulette_log_thread_id == 18657
+    assert settings.bonus_request_log_chat_id == -1003333957923
+    assert settings.bonus_request_log_thread_id == 1
 
 
 @pytest.mark.asyncio
@@ -218,11 +275,11 @@ async def test_notify_admins_can_override_log_topic_for_roulette() -> None:
 @pytest.mark.asyncio
 async def test_notify_admins_uses_default_log_topic_without_override() -> None:
     bot = FakeBot()
-    callback = SimpleNamespace(bot=bot, from_user=SimpleNamespace(id=1))
+    callback = SimpleNamespace(bot=bot, from_user=SimpleNamespace(id=999))
     settings = Settings(
         BOT_TOKEN="123456:REALISH",
         OWNER_ID=1,
-        ADMIN_IDS="1",
+        ADMIN_IDS="2,3",
         LOG_CHAT_ID=-1002093104375,
         LOG_THREAD_ID=2215,
         ROULETTE_LOG_THREAD_ID=18657,
@@ -234,6 +291,36 @@ async def test_notify_admins_uses_default_log_topic_without_override() -> None:
         (
             (),
             {"chat_id": -1002093104375, "text": "default log", "message_thread_id": 2215},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_bonus_use_request_routes_to_dedicated_topic_only() -> None:
+    bot = FakeBot()
+    callback = SimpleNamespace(bot=bot, from_user=SimpleNamespace(id=999))
+    settings = Settings(
+        BOT_TOKEN="123456:REALISH",
+        OWNER_ID=1,
+        ADMIN_IDS="2,3",
+        LOG_CHAT_ID=-1002093104375,
+        LOG_THREAD_ID=2215,
+        BONUS_REQUEST_LOG_CHAT_ID=-1003333957923,
+        BONUS_REQUEST_LOG_THREAD_ID=1,
+    )
+    buttons = SimpleNamespace()
+
+    await send_bonus_use_request(cast(Any, callback), settings, "bonus request", cast(Any, buttons))
+
+    assert bot.messages == [
+        (
+            (),
+            {
+                "chat_id": -1003333957923,
+                "text": "bonus request",
+                "reply_markup": buttons,
+                "message_thread_id": 1,
+            },
         )
     ]
 
@@ -340,7 +427,7 @@ async def test_roulette_info_contains_expandable_prize_list_and_special_chances(
     assert "<b>АТ-1</b> — 9.7%" in text
     assert "<b>Telegram Premium</b> — 1%" in text
     assert "<b>ТГ NFT</b> — 2%" in text
-    assert "каждый 50-й прокрут" in text
+    assert "каждый 50-й общий прокрут" in text
 
 
 @pytest.mark.asyncio
@@ -414,25 +501,47 @@ async def test_roulette_spin_requires_5_taurons_and_does_not_create_spin(tmp_pat
 async def test_roulette_every_50th_spin_is_guaranteed_unique_nft(tmp_path):
     db = Database(tmp_path / "bot.db")
     await db.migrate()
-    await seed(db, 1, taurons=250)
+    await seed(db, 1, taurons=245)
+    await seed(db, 2, taurons=5)
     economy = EconomyService(db)
     roulette = RouletteService(db, rng=FixedRng(0.0))
     for _ in range(49):
         await roulette.spin(1, economy)
 
-    result = await roulette.spin(1, economy)
+    result = await roulette.spin(2, economy)
 
     assert result.spin_number == 50
     assert result.prize.code == "tg_nft"
     assert result.guaranteed is True
-    row = await db.fetch_one("SELECT prize_code, prize_name, guaranteed FROM roulette_spins WHERE id = 50")
-    assert dict(row) == {"prize_code": "tg_nft_50", "prize_name": "ТГ NFT #50", "guaranteed": 1}
-    assert await db.fetch_val("SELECT count FROM user_prizes WHERE user_id = 1 AND prize_code = 'tg_nft_50'") == 1
+    row = await db.fetch_one("SELECT user_id, prize_code, prize_name, guaranteed FROM roulette_spins WHERE id = 50")
+    assert row is not None
+    assert dict(row) == {"user_id": 2, "prize_code": "tg_nft_50", "prize_name": "ТГ NFT #50", "guaranteed": 1}
+    assert await db.fetch_val("SELECT count FROM user_prizes WHERE user_id = 2 AND prize_code = 'tg_nft_50'") == 1
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_roulette_reset_player_spins_only_for_target_user(tmp_path):
+async def test_roulette_spins_are_global_across_players(tmp_path):
+    db = Database(tmp_path / "bot.db")
+    await db.migrate()
+    await seed(db, 1, taurons=10)
+    await seed(db, 2, taurons=10)
+    economy = EconomyService(db)
+    roulette = RouletteService(db, rng=FixedRng(0.0))
+
+    first = await roulette.spin(1, economy)
+    second = await roulette.spin(2, economy)
+
+    assert first.spin_number == 1
+    assert second.spin_number == 2
+    assert await roulette.total_spins() == 2
+    assert await roulette.player_spins_count(1) == 1
+    assert await roulette.player_spins_count(2) == 1
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_roulette_reset_all_spins_resets_global_counter(tmp_path):
     db = Database(tmp_path / "bot.db")
     await db.migrate()
     await seed(db, 1, taurons=20)
@@ -443,23 +552,23 @@ async def test_roulette_reset_player_spins_only_for_target_user(tmp_path):
     await roulette.spin(1, economy)
     await roulette.spin(2, economy)
 
-    deleted = await roulette.reset_player_spins(1)
-    result = await roulette.spin(1, economy)
+    deleted = await roulette.reset_all_spins()
+    result = await roulette.spin(2, economy)
 
-    assert deleted == 2
+    assert deleted == 3
     assert result.spin_number == 1
-    assert await roulette.player_spins_count(1) == 1
+    assert await roulette.total_spins() == 1
+    assert await roulette.player_spins_count(1) == 0
     assert await roulette.player_spins_count(2) == 1
     await db.close()
 
 
 @pytest.mark.asyncio
-async def test_reset_spins_admin_command_parses_username_target(tmp_path):
+async def test_reset_spins_admin_command_is_global_without_target(tmp_path):
     db = Database(tmp_path / "bot.db")
     await db.migrate()
     await seed(db, 42, username="target")
-    economy = EconomyService(db)
-    message = SimpleNamespace(text="-прокрут @target", reply_to_message=None)
+    roulette = RouletteService(db)
 
-    assert await parse_reset_spins_target(message, economy) == 42
+    assert await roulette.reset_all_spins() == 0
     await db.close()

@@ -91,14 +91,10 @@ async def handle_proof(message: Message, state: FSMContext, missions: MissionSer
         f"Задание: <code>{mission_id}</code>\n"
         f"Описание: {message.text or message.caption or 'Без описания'}"
     )
-    targets = []
     if settings.log_chat_id:
-        targets.append(settings.log_chat_id)
-    targets.extend(settings.admin_ids)
-    for chat_id in set(targets):
         try:
-            kwargs = {"chat_id": chat_id, "reply_markup": buttons}
-            if settings.log_thread_id and chat_id == settings.log_chat_id:
+            kwargs = {"chat_id": settings.log_chat_id, "reply_markup": buttons}
+            if settings.log_thread_id:
                 kwargs["message_thread_id"] = settings.log_thread_id
             if kind == "photo":
                 await message.bot.send_photo(photo=file_id, caption=admin_text, **kwargs)

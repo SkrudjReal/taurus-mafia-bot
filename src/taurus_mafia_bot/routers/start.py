@@ -6,7 +6,8 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
-from aiogram_dialog import Dialog, DialogManager, StartMode, Window
+from aiogram_dialog import Dialog, DialogManager, ShowMode, StartMode, Window
+from aiogram_dialog.api.entities.stack import Stack
 from aiogram_dialog.widgets.common import BaseScroll
 from aiogram_dialog.widgets.kbd import CurrentPage, FirstPage, LastPage, NextPage, PrevPage, Row
 from aiogram_dialog.widgets.text import Const, Format, Text
@@ -107,6 +108,7 @@ HELP_TEXT = """
 <code>/users</code> - список пользователей
 <code>/user @user/ID</code> - карточка пользователя
 <code>/reset_missions</code> - сбросить выполненные задания
+<code>-прокрут</code> - обнулить общий счётчик прокруток рулетки (owner)
 <code>выдать т победителям 10</code> - начислить <b>T</b> победителям игры
 <code>выдать тс участникам 5</code> - начислить <b>TC</b> всем участникам игры
 <code>/cancel</code> - отменить текущее действие</blockquote>
@@ -186,6 +188,23 @@ def format_taurons_top(rows, total: int) -> str:
     return "\n".join(lines)
 
 
+async def start_top_dialog(message: Message, dialog_manager: DialogManager, top_text: str) -> None:
+    assert message.from_user is not None
+    stack = Stack()
+    manager = dialog_manager.bg(
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
+        thread_id=message.message_thread_id,
+        stack_id=stack.id,
+    )
+    await manager.start(
+        TopDialogSG.TEXT,
+        mode=StartMode.NORMAL,
+        show_mode=ShowMode.SEND,
+        data={"top_text": top_text},
+    )
+
+
 @router.message(Command("top"))
 @router.message(Command("topt"))
 @router.message(F.text.casefold() == "топ")
@@ -194,11 +213,7 @@ async def taurons_top(message: Message, economy: EconomyService, dialog_manager:
     rows = await economy.top_taurons(limit=None)
     total = await economy.total_taurons()
     top_text = format_taurons_top(rows, total)
-    await dialog_manager.start(
-        TopDialogSG.TEXT,
-        mode=StartMode.NEW_STACK,
-        data={"top_text": top_text},
-    )
+    await start_top_dialog(message, dialog_manager, top_text)
 
 
 @router.message(Command("convert"))

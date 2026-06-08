@@ -36,7 +36,6 @@ async def notify_admins(
     log_chat_id: int | None = None,
     log_thread_id: int | None = None,
 ) -> None:
-    targets = list(settings.admin_ids)
     target_log_chat_id = log_chat_id if log_chat_id is not None else settings.log_chat_id
     if target_log_chat_id:
         try:
@@ -47,13 +46,18 @@ async def notify_admins(
             await callback.bot.send_message(**kwargs)
         except Exception:
             pass
-    for admin_id in targets:
-        if callback.from_user and admin_id == callback.from_user.id:
-            continue
-        try:
-            await callback.bot.send_message(admin_id, text)
-        except Exception:
-            pass
+
+
+async def send_bonus_use_request(callback: CallbackQuery, settings: Settings, text: str, buttons: InlineKeyboardMarkup) -> None:
+    if not settings.bonus_request_log_chat_id or callback.bot is None:
+        return
+    try:
+        kwargs = {"chat_id": settings.bonus_request_log_chat_id, "text": text, "reply_markup": buttons}
+        if settings.bonus_request_log_thread_id:
+            kwargs["message_thread_id"] = settings.bonus_request_log_thread_id
+        await callback.bot.send_message(**kwargs)
+    except Exception:
+        pass
 
 
 @router.message(F.text == "Магазин")
@@ -183,19 +187,7 @@ async def use_bonus(callback: CallbackQuery, economy: EconomyService, settings: 
     ]])
     await callback.answer("Заявка отправлена", show_alert=True)
     text = f"<b>Заявка на использование бонуса</b>\nПользователь: <code>{user_id}</code>\nБонус: {row['prize_name']}"
-    for admin_id in settings.admin_ids:
-        try:
-            await callback.bot.send_message(admin_id, text, reply_markup=buttons)
-        except Exception:
-            pass
-    if settings.log_chat_id:
-        try:
-            kwargs = {"chat_id": settings.log_chat_id, "text": text, "reply_markup": buttons}
-            if settings.log_thread_id:
-                kwargs["message_thread_id"] = settings.log_thread_id
-            await callback.bot.send_message(**kwargs)
-        except Exception:
-            pass
+    await send_bonus_use_request(callback, settings, text, buttons)
 
 
 @router.callback_query(F.data.startswith("confirm_use:") | F.data.startswith("reject_use:"))

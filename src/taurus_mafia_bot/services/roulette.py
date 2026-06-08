@@ -104,14 +104,14 @@ class RouletteService:
     async def player_spins_count(self, user_id: int) -> int:
         return int(await self.db.fetch_val("SELECT COUNT(*) FROM roulette_spins WHERE user_id = ?", (user_id,)) or 0)
 
-    async def reset_player_spins(self, user_id: int) -> int:
-        deleted = await self.player_spins_count(user_id)
-        await self.db.execute("DELETE FROM roulette_spins WHERE user_id = ?", (user_id,))
+    async def reset_all_spins(self) -> int:
+        deleted = await self.total_spins()
+        await self.db.execute("DELETE FROM roulette_spins")
         return deleted
 
     async def _create_spin_row(self, user_id: int) -> tuple[int, int]:
         conn = await self.db.connect()
-        spin_number = int(await self.db.fetch_val("SELECT COUNT(*) FROM roulette_spins WHERE user_id = ?", (user_id,)) or 0) + 1
+        spin_number = int(await self.db.fetch_val("SELECT COUNT(*) FROM roulette_spins") or 0) + 1
         await conn.execute("INSERT INTO roulette_spins (user_id, spin_number) VALUES (?, ?)", (user_id, spin_number))
         cursor = await conn.execute("SELECT last_insert_rowid()")
         row = await cursor.fetchone()
@@ -130,7 +130,7 @@ def roulette_info_text() -> str:
         "Здесь можно выиграть бонусы и специальные призы.\n\n"
         "<blockquote expandable>"
         + "\n\n".join(rows)
-        + "\n\n<b>Гарантия:</b> каждый 50-й прокрут игрока даёт <b>ТГ NFT</b>. "
-        "Каждый 100-й прокрут игрока тоже попадает в эту гарантию."
+        + "\n\n<b>Гарантия:</b> каждый 50-й общий прокрут рулетки даёт <b>ТГ NFT</b>. "
+        "Каждый 100-й общий прокрут тоже попадает в эту гарантию."
         "</blockquote>"
     )

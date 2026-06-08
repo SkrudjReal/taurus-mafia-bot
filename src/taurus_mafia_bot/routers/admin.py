@@ -120,33 +120,17 @@ async def transfer_taurcoins(message: Message, economy: EconomyService) -> None:
     await transfer_currency(message, economy, "TC")
 
 
-async def parse_reset_spins_target(message: Message, economy: EconomyService) -> int:
-    parts = (message.text or "").split()
-    if message.reply_to_message and message.reply_to_message.from_user:
-        if len(parts) != 1:
-            raise EconomyError("Формат реплаем: -прокрут")
-        return message.reply_to_message.from_user.id
-    if len(parts) != 2:
-        raise EconomyError("Формат: -прокрут @user/ID")
-    row = await economy.find_user(parts[1])
-    if row is None:
-        raise EconomyError("Пользователь не найден в базе.")
-    return int(row["telegram_id"])
-
-
 @router.message(F.text.regexp(r"^[-–—]прокрут(?:\s|$)"))
-async def reset_roulette_spins(message: Message, economy: EconomyService, roulette: RouletteService, settings: Settings) -> None:
+async def reset_roulette_spins(message: Message, roulette: RouletteService, settings: Settings) -> None:
     assert message.from_user is not None
-    if not await is_admin_user(message.from_user.id, economy, settings):
-        await message.reply("<b>У тебя нет доступа к этой команде.</b>")
+    if message.from_user.id != settings.owner_id:
+        await message.reply("<b>Только владелец может обнулять прокрутки рулетки.</b>")
         return
-    try:
-        target_id = await parse_reset_spins_target(message, economy)
-    except EconomyError as exc:
-        await message.reply(f"<b>Ошибка:</b> {exc}")
+    if (message.text or "").split()[1:] or message.reply_to_message:
+        await message.reply("<b>Формат:</b> <code>-прокрут</code>")
         return
-    deleted = await roulette.reset_player_spins(target_id)
-    await message.reply(f"<b>Прокрутки обнулены</b>\nПользователь: <code>{target_id}</code>\nУдалено записей: <code>{deleted}</code>")
+    deleted = await roulette.reset_all_spins()
+    await message.reply(f"<b>Общие прокрутки рулетки обнулены.</b>\nУдалено записей: <code>{deleted}</code>")
 
 
 @router.message(Command("apanel"))
