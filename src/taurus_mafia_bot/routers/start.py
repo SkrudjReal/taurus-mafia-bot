@@ -7,8 +7,9 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import Dialog, DialogManager, StartMode, Window
+from aiogram_dialog.widgets.common import BaseScroll
 from aiogram_dialog.widgets.kbd import CurrentPage, FirstPage, LastPage, NextPage, PrevPage, Row
-from aiogram_dialog.widgets.text import Const, Format, ScrollingText
+from aiogram_dialog.widgets.text import Const, Format, Text
 
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.keyboards import convert_keyboard, main_menu
@@ -17,16 +18,55 @@ from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 router = Router(name="start")
 
 
+def split_text_by_lines(text: str, page_size: int) -> list[str]:
+    """Split Telegram HTML text without cutting tags/entities across page boundaries."""
+    if page_size <= 0:
+        return [text]
+    pages: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if current and len(current) + len(line) > page_size:
+            pages.append(current.rstrip("\n"))
+            current = ""
+        if len(line) > page_size:
+            while len(line) > page_size:
+                pages.append(line[:page_size].rstrip("\n"))
+                line = line[page_size:]
+        current += line
+    if current or not pages:
+        pages.append(current.rstrip("\n"))
+    return pages
+
+
+class LineScrollingText(Text, BaseScroll):
+    def __init__(self, text: Text, id: str, page_size: int = 0):
+        Text.__init__(self)
+        BaseScroll.__init__(self, id=id)
+        self.text = text
+        self.page_size = page_size
+
+    async def _render_contents(self, data: dict, manager: DialogManager) -> str:
+        return await self.text.render_text(data, manager)
+
+    async def _render_text(self, data: dict, manager: DialogManager) -> str:
+        pages = split_text_by_lines(await self._render_contents(data, manager), self.page_size)
+        page = min(await self.get_page(manager), len(pages) - 1)
+        return pages[page]
+
+    async def get_page_count(self, data: dict, manager: DialogManager) -> int:
+        return len(split_text_by_lines(await self._render_contents(data, manager), self.page_size))
+
+
 class TopDialogSG(StatesGroup):
     TEXT = State()
 
 
 top_dialog = Dialog(
     Window(
-        ScrollingText(
+        LineScrollingText(
             text=Format("{start_data[top_text]}"),
             id="top_scroll",
-            page_size=1000,
+            page_size=3500,
         ),
         Row(
             FirstPage(scroll="top_scroll", text=Const("⏮️")),

@@ -8,7 +8,7 @@ from taurus_mafia_bot.db import Database
 from taurus_mafia_bot.routers.admin import parse_reset_spins_target
 from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_user_mention
 from taurus_mafia_bot.routers.shop import notify_admins
-from taurus_mafia_bot.routers.start import TopDialogSG, format_taurons_top
+from taurus_mafia_bot.routers.start import TopDialogSG, format_taurons_top, split_text_by_lines
 from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 from taurus_mafia_bot.services.missions import MissionService
 from taurus_mafia_bot.services.roulette import RouletteService, roulette_info_text
@@ -140,6 +140,26 @@ async def test_top_taurons_can_fetch_all_rows_for_dialog_pagination(tmp_path):
     assert "Всего тауронов: <b>78</b>" in text
     assert TopDialogSG.TEXT.state == "TopDialogSG:TEXT"
     await db.close()
+
+
+def test_top_dialog_pagination_does_not_split_html_mention_tags() -> None:
+    text = "\n".join(
+        ["📊 <b>Топ богатых пользователей по Тауронам</b>", ""]
+        + [
+            f' {index}. <a href="tg://openmessage?user_id={index}">User {index}</a> — <b>{index}</b>'
+            for index in range(1, 30)
+        ]
+        + ["", "Всего тауронов: <b>435</b>"]
+    )
+
+    pages = split_text_by_lines(text, page_size=350)
+
+    assert len(pages) > 1
+    assert "<a " not in pages[0] or "</a>" in pages[0]
+    for page in pages:
+        assert len(page) <= 350
+        assert page.count("<a ") == page.count("</a>")
+        assert page.count("<b>") == page.count("</b>")
 
 
 @pytest.mark.asyncio
