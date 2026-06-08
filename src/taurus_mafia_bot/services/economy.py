@@ -47,17 +47,18 @@ class EconomyService:
     async def user_count(self) -> int:
         return int(await self.db.fetch_val("SELECT COUNT(*) FROM users") or 0)
 
-    async def top_taurons(self, limit: int = 10):
-        return await self.db.fetch_all(
-            """
+    async def top_taurons(self, limit: int | None = 10):
+        sql = """
             SELECT telegram_id, full_name, username, taurons
             FROM users
             WHERE taurons > 0
             ORDER BY taurons DESC, full_name COLLATE NOCASE ASC, telegram_id ASC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        """
+        params: tuple[int, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        return await self.db.fetch_all(sql, params)
 
     async def total_taurons(self) -> int:
         return int(await self.db.fetch_val("SELECT COALESCE(SUM(taurons), 0) FROM users") or 0)

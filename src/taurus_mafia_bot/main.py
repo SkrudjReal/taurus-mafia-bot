@@ -6,6 +6,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram_dialog import setup_dialogs
 
 from taurus_mafia_bot.config import get_settings
 from taurus_mafia_bot.db import Database
@@ -35,10 +36,12 @@ async def create_dispatcher(settings=None) -> Dispatcher:
         roulette=roulette_service,
     )
     dp.include_router(start.router)
+    dp.include_router(start.top_dialog)
     dp.include_router(shop.router)
     dp.include_router(roulette.router)
     dp.include_router(admin.router)
     dp.include_router(missions.router)
+    setup_dialogs(dp)
     return dp
 
 

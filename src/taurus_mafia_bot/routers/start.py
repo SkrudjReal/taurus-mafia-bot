@@ -4,13 +4,40 @@ from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
+from aiogram_dialog import Dialog, DialogManager, StartMode, Window
+from aiogram_dialog.widgets.kbd import CurrentPage, FirstPage, LastPage, NextPage, PrevPage, Row
+from aiogram_dialog.widgets.text import Const, Format, ScrollingText
 
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.keyboards import convert_keyboard, main_menu
 from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 
 router = Router(name="start")
+
+
+class TopDialogSG(StatesGroup):
+    TEXT = State()
+
+
+top_dialog = Dialog(
+    Window(
+        ScrollingText(
+            text=Format("{start_data[top_text]}"),
+            id="top_scroll",
+            page_size=1000,
+        ),
+        Row(
+            FirstPage(scroll="top_scroll", text=Const("⏮️")),
+            PrevPage(scroll="top_scroll", text=Const("◀️")),
+            CurrentPage(scroll="top_scroll"),
+            NextPage(scroll="top_scroll", text=Const("▶️")),
+            LastPage(scroll="top_scroll", text=Const("⏭️")),
+        ),
+        state=TopDialogSG.TEXT,
+    ),
+)
 
 HELP_TEXT = """
 <b>Список команд <i>Taur Bot</i></b>
@@ -123,10 +150,15 @@ def format_taurons_top(rows, total: int) -> str:
 @router.message(Command("topt"))
 @router.message(F.text.casefold() == "топ")
 @router.message(F.text.casefold() == "топ тауронов")
-async def taurons_top(message: Message, economy: EconomyService) -> None:
-    rows = await economy.top_taurons(limit=10)
+async def taurons_top(message: Message, economy: EconomyService, dialog_manager: DialogManager) -> None:
+    rows = await economy.top_taurons(limit=None)
     total = await economy.total_taurons()
-    await message.reply(format_taurons_top(rows, total))
+    top_text = format_taurons_top(rows, total)
+    await dialog_manager.start(
+        TopDialogSG.TEXT,
+        mode=StartMode.NEW_STACK,
+        data={"top_text": top_text},
+    )
 
 
 @router.message(Command("convert"))

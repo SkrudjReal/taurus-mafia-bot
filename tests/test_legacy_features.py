@@ -8,7 +8,7 @@ from taurus_mafia_bot.db import Database
 from taurus_mafia_bot.routers.admin import parse_reset_spins_target
 from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_user_mention
 from taurus_mafia_bot.routers.shop import notify_admins
-from taurus_mafia_bot.routers.start import format_taurons_top
+from taurus_mafia_bot.routers.start import TopDialogSG, format_taurons_top
 from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 from taurus_mafia_bot.services.missions import MissionService
 from taurus_mafia_bot.services.roulette import RouletteService, roulette_info_text
@@ -120,6 +120,25 @@ async def test_top_taurons_orders_users_and_formats_total(tmp_path):
         "\n"
         "Всего тауронов: <b>5</b>"
     )
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_top_taurons_can_fetch_all_rows_for_dialog_pagination(tmp_path):
+    db = Database(tmp_path / "bot.db")
+    await db.migrate()
+    for user_id in range(1, 13):
+        await seed(db, user_id, taurons=user_id, full_name=f"User {user_id}")
+    economy = EconomyService(db)
+
+    rows = await economy.top_taurons(limit=None)
+    text = format_taurons_top(rows, await economy.total_taurons())
+
+    assert len(rows) == 12
+    assert ' 1. <a href="tg://openmessage?user_id=12">User 12</a> — <b>12</b>' in text
+    assert ' 12. <a href="tg://openmessage?user_id=1">User 1</a> — <b>1</b>' in text
+    assert "Всего тауронов: <b>78</b>" in text
+    assert TopDialogSG.TEXT.state == "TopDialogSG:TEXT"
     await db.close()
 
 
