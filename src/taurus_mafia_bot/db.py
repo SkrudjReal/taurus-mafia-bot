@@ -22,6 +22,7 @@ class Database:
 
     async def migrate(self) -> None:
         conn = await self.connect()
+        await self._migrate_legacy_users_schema(conn)
         await conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -113,6 +114,56 @@ class Database:
                 raise
         await conn.execute("UPDATE roulette_spins SET spin_number = id WHERE spin_number = 0")
         await conn.commit()
+
+    async def _migrate_legacy_users_schema(self, conn: aiosqlite.Connection) -> None:
+        """Convert the original taurus.db users table to the modern schema.
+
+        The legacy bot stored users as:
+        users(user_id, first_name, username, is_admin, taurons, taurcoins).
+        Modern services expect users(telegram_id, full_name, username, ...).
+        """
+        columns = await self._table_columns(conn, "users")
+        if not columns or "telegram_id" in columns or "user_id" not in columns:
+            return
+
+        await conn.execute("PRAGMA foreign_keys = OFF")
+        await conn.execute("ALTER TABLE users RENAME TO users_legacy")
+        await conn.executescript(
+            """
+            CREATE TABLE users (
+                telegram_id INTEGER PRIMARY KEY,
+                full_name TEXT NOT NULL DEFAULT '',
+                username TEXT,
+                taurons INTEGER NOT NULL DEFAULT 0,
+                taurcoins INTEGER NOT NULL DEFAULT 0,
+                is_admin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO users (telegram_id, full_name, username, taurons, taurcoins, is_admin)
+            SELECT
+                user_id,
+                COALESCE(first_name, ''),
+                username,
+                COALESCE(taurons, 0),
+                COALESCE(taurcoins, 0),
+                COALESCE(is_admin, 0)
+            FROM users_legacy
+            """
+        )
+        await conn.execute("DROP TABLE users_legacy")
+        await conn.execute("PRAGMA foreign_keys = ON")
+        await conn.commit()
+
+    @staticmethod
+    async def _table_columns(conn: aiosqlite.Connection, table: str) -> set[str]:
+        cursor = await conn.execute(f'PRAGMA table_info("{table}")')
+        rows = await cursor.fetchall()
+        return {str(row[1]) for row in rows}
 
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         conn = await self.connect()

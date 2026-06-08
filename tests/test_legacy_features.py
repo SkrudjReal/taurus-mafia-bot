@@ -1,3 +1,4 @@
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -41,6 +42,64 @@ async def seed(db: Database, user_id: int, taurons: int = 0, taurcoins: int = 0,
 
 
 @pytest.mark.asyncio
+async def test_migrate_converts_legacy_taurus_db_users_schema(tmp_path):
+    db_path = tmp_path / "taurus.db"
+    legacy = sqlite3.connect(db_path)
+    legacy.executescript(
+        """
+        CREATE TABLE users (
+            user_id INTEGER PRIMARY KEY,
+            first_name TEXT,
+            username TEXT,
+            is_admin BOOLEAN DEFAULT FALSE,
+            taurons INTEGER DEFAULT 0,
+            taurcoins INTEGER DEFAULT 0
+        );
+        CREATE TABLE parametrs (name TEXT PRIMARY KEY, value REAL);
+        CREATE TABLE user_missions (
+            user_id INTEGER,
+            mission_id INTEGER,
+            status TEXT DEFAULT 'pending',
+            report_data TEXT DEFAULT '',
+            timestamp INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, mission_id)
+        );
+        INSERT INTO users (user_id, first_name, username, is_admin, taurons, taurcoins)
+        VALUES (1234, 'Legacy Name', 'legacy_user', 1, 77, 5);
+        INSERT INTO user_missions (user_id, mission_id, status, report_data, timestamp)
+        VALUES (1234, 2, 'reported', 'proof', 1710000000);
+        INSERT INTO parametrs (name, value) VALUES ('convert_rate', 10);
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    db = Database(db_path)
+    await db.migrate()
+    economy = EconomyService(db)
+
+    columns = await db.fetch_all('PRAGMA table_info("users")')
+    column_names = {row["name"] for row in columns}
+    profile = await economy.profile(1234)
+    mission = await db.fetch_one("SELECT * FROM user_missions WHERE user_id = ? AND mission_id = ?", (1234, 2))
+
+    assert "telegram_id" in column_names
+    assert "full_name" in column_names
+    assert "user_id" not in column_names
+    assert profile is not None
+    assert profile["telegram_id"] == 1234
+    assert profile["full_name"] == "Legacy Name"
+    assert profile["username"] == "legacy_user"
+    assert profile["is_admin"] == 1
+    assert profile["taurons"] == 77
+    assert profile["taurcoins"] == 5
+    assert mission is not None
+    assert mission["status"] == "reported"
+    assert await economy.total_taurons() == 77
+    await db.close()
+
+
+@pytest.mark.asyncio
 async def test_top_taurons_orders_users_and_formats_total(tmp_path):
     db = Database(tmp_path / "bot.db")
     await db.migrate()
@@ -55,9 +114,9 @@ async def test_top_taurons_orders_users_and_formats_total(tmp_path):
     assert text == (
         "📊 <b>Топ богатых пользователей по Тауронам</b>\n"
         "\n"
-        " 1. папочка кенни — <b>2</b>\n"
-        " 2. ಣsasha — <b>2</b>\n"
-        " 3. IliaSlime — <b>1</b>\n"
+        ' 1. <a href="tg://openmessage?user_id=1">папочка кенни</a> — <b>2</b>\n'
+        ' 2. <a href="tg://openmessage?user_id=2">ಣsasha</a> — <b>2</b>\n'
+        ' 3. <a href="tg://openmessage?user_id=3">IliaSlime</a> — <b>1</b>\n'
         "\n"
         "Всего тауронов: <b>5</b>"
     )
@@ -74,6 +133,7 @@ async def test_top_taurons_escapes_names(tmp_path):
     text = format_taurons_top(await economy.top_taurons(), await economy.total_taurons())
 
     assert "&lt;bad&amp;name&gt;" in text
+    assert '<a href="tg://openmessage?user_id=1">&lt;bad&amp;name&gt;</a>' in text
     await db.close()
 
 

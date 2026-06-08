@@ -102,13 +102,19 @@ async def balance(message: Message, economy: EconomyService) -> None:
     await message.reply(f"<b>Твой баланс:</b> {row['taurons']}Т, {row['taurcoins']}TC")
 
 
+def format_openmessage_mention(user_id: int, display_name: str | None) -> str:
+    name = escape(display_name or str(user_id))
+    return f'<a href="tg://openmessage?user_id={user_id}">{name}</a>'
+
+
 def format_taurons_top(rows, total: int) -> str:
     if not rows:
         return "📊 <b>Топ богатых пользователей по Тауронам</b>\n\nПока нет пользователей с тауронами.\n\nВсего тауронов: <b>0</b>"
     lines = ["📊 <b>Топ богатых пользователей по Тауронам</b>", ""]
     for index, row in enumerate(rows, start=1):
-        name = escape(row["full_name"] or row["username"] or str(row["telegram_id"]))
-        lines.append(f" {index}. {name} — <b>{int(row['taurons'])}</b>")
+        display_name = row["full_name"] or row["username"] or str(row["telegram_id"])
+        mention = format_openmessage_mention(int(row["telegram_id"]), display_name)
+        lines.append(f" {index}. {mention} — <b>{int(row['taurons'])}</b>")
     lines.extend(["", f"Всего тауронов: <b>{total}</b>"])
     return "\n".join(lines)
 
