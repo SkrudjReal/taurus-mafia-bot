@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -48,16 +49,29 @@ async def notify_admins(
             pass
 
 
-async def send_bonus_use_request(callback: CallbackQuery, settings: Settings, text: str, buttons: InlineKeyboardMarkup) -> None:
-    if not settings.bonus_request_log_chat_id or callback.bot is None:
-        return
+async def send_bonus_use_request(callback: CallbackQuery, settings: Settings, text: str, buttons: InlineKeyboardMarkup) -> bool:
+    bot = callback.bot
+    if not settings.bonus_request_log_chat_id or bot is None:
+        return False
+    kwargs = {"chat_id": settings.bonus_request_log_chat_id, "text": text, "reply_markup": buttons}
+    if settings.bonus_request_log_thread_id:
+        kwargs["message_thread_id"] = settings.bonus_request_log_thread_id
     try:
-        kwargs = {"chat_id": settings.bonus_request_log_chat_id, "text": text, "reply_markup": buttons}
-        if settings.bonus_request_log_thread_id:
-            kwargs["message_thread_id"] = settings.bonus_request_log_thread_id
-        await callback.bot.send_message(**kwargs)
+        await bot.send_message(**kwargs)
+        return True
+    except TelegramBadRequest as exc:
+        # Telegram topic links ending in /1 can point at the General topic. Some Bot API setups
+        # reject message_thread_id=1, so retry in the same chat without a thread before failing.
+        if settings.bonus_request_log_thread_id == 1 and "chat not found" not in exc.message.lower():
+            kwargs.pop("message_thread_id", None)
+            try:
+                await bot.send_message(**kwargs)
+                return True
+            except Exception:
+                return False
+        return False
     except Exception:
-        pass
+        return False
 
 
 @router.message(F.text == "Магазин")
@@ -185,9 +199,12 @@ async def use_bonus(callback: CallbackQuery, economy: EconomyService, settings: 
         InlineKeyboardButton(text="Подтвердить", callback_data=f"confirm_use:{user_id}:{code}"),
         InlineKeyboardButton(text="Отклонить", callback_data=f"reject_use:{user_id}:{code}"),
     ]])
-    await callback.answer("Заявка отправлена", show_alert=True)
     text = f"<b>Заявка на использование бонуса</b>\nПользователь: <code>{user_id}</code>\nБонус: {row['prize_name']}"
-    await send_bonus_use_request(callback, settings, text, buttons)
+    sent = await send_bonus_use_request(callback, settings, text, buttons)
+    if sent:
+        await callback.answer("Заявка отправлена", show_alert=True)
+    else:
+        await callback.answer("Не удалось отправить заявку в топик. Проверьте доступ бота к чату заявок.", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("confirm_use:") | F.data.startswith("reject_use:"))

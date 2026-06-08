@@ -26,12 +26,15 @@ class FixedRng:
 
 
 class FakeBot:
-    def __init__(self) -> None:
+    def __init__(self, *, send_message_exception: Exception | None = None) -> None:
         self.messages = []
         self.photos = []
         self.documents = []
+        self.send_message_exception = send_message_exception
 
     async def send_message(self, *args, **kwargs):
+        if self.send_message_exception is not None:
+            raise self.send_message_exception
         self.messages.append((args, kwargs))
 
     async def send_photo(self, *args, **kwargs):
@@ -310,8 +313,9 @@ async def test_bonus_use_request_routes_to_dedicated_topic_only() -> None:
     )
     buttons = SimpleNamespace()
 
-    await send_bonus_use_request(cast(Any, callback), settings, "bonus request", cast(Any, buttons))
+    sent = await send_bonus_use_request(cast(Any, callback), settings, "bonus request", cast(Any, buttons))
 
+    assert sent is True
     assert bot.messages == [
         (
             (),
