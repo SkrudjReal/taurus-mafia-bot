@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from html import escape
 
 from aiogram import F, Router
@@ -86,6 +87,8 @@ HELP_TEXT = """
 <blockquote expandable><code>/start</code> - регистрация и запуск меню
 <code>хелп</code> / <code>/help</code> - показать это меню
 <code>/info</code> - показать ID текущего чата
+<code>/id</code> / <code>.ид</code> - показать ID пользователя
+<code>/dev</code> - контакты разработчика
 <code>/tw</code> - посмотреть баланс
 <code>/top</code> / <code>топ</code> - топ пользователей по <b>Taurons</b>
 <code>/convert</code> - конвертация <b>TC</b> в <b>T</b>
@@ -139,6 +142,62 @@ async def help_command(message: Message) -> None:
 async def chat_info(message: Message) -> None:
     thread = f"\nThread ID: <code>{message.message_thread_id}</code>" if message.message_thread_id else ""
     await message.reply(f"Chat ID: <code>{message.chat.id}</code>{thread}")
+
+
+@router.message(F.text.regexp(r"(?i)^[!./](чат ид|chat id|chatid|chat_id)(?:@\w+)?$"))
+async def chat_id_alias(message: Message) -> None:
+    await chat_info(message)
+
+
+def extract_user_identifier(text: str) -> str | None:
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    target = parts[1].strip()
+    match = re.search(r"(?:tg://openmessage\?user_id=|https?://t\.me/|@)([\w\d_]{5,32}|\d{5,15})", target)
+    if match:
+        value = match.group(1)
+        return value if value.isdigit() else f"@{value}"
+    if target.lstrip("-").isdigit():
+        return target
+    if target.startswith("@"):
+        return target
+    return None
+
+
+def user_id_text(user_id: int, full_name: str | None, username: str | None = None) -> str:
+    display = escape(full_name or username or str(user_id))
+    mention = f'<a href="tg://openmessage?user_id={user_id}">{display}</a>'
+    username_line = f"\nUsername: @{escape(username)}" if username else ""
+    return f"🌀 Генетический код <code>@{user_id}</code> игрока «<b>{mention}</b>»{username_line}"
+
+
+@router.message(F.text.regexp(r"(?i)^[!./](ид|id)(?:@\w+)?(?:\s+.+)?$"))
+async def get_user_id(message: Message, economy: EconomyService) -> None:
+    assert message.from_user is not None
+    identifier = extract_user_identifier(message.text or "")
+    if identifier:
+        row = await economy.find_user(identifier)
+        if row is None:
+            await message.answer("📝 Пользователь не найден в базе.")
+            return
+        await message.answer(
+            user_id_text(int(row["telegram_id"]), str(row["full_name"]), row["username"]),
+            disable_web_page_preview=True,
+        )
+        return
+
+    target = message.reply_to_message.from_user if message.reply_to_message and message.reply_to_message.from_user else message.from_user
+    await message.answer(user_id_text(target.id, target.full_name, target.username), disable_web_page_preview=True)
+
+
+@router.message(Command("dev", "developer"))
+async def dev(message: Message) -> None:
+    text = "🍷 Project minded-dev is <b>@velunae</b>"
+    try:
+        await message.answer(text, message_effect_id="5159385139981059251")
+    except Exception:
+        await message.answer(text)
 
 
 @router.message(F.text == "Профиль")

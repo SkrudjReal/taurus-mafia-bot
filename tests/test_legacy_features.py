@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from types import SimpleNamespace
 from typing import Any, cast
@@ -8,9 +9,11 @@ from aiogram_dialog import ShowMode, StartMode
 
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.db import Database
+from taurus_mafia_bot.routers.admin import extract_game_user_ids, format_broadcast_summary
+from taurus_mafia_bot.routers.missions import apply_mission_import, format_mission_report_text, proof_report_data, proof_text
 from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_user_mention
 from taurus_mafia_bot.routers.shop import notify_admins, send_bonus_use_request
-from taurus_mafia_bot.routers.start import TopDialogSG, format_taurons_top, split_text_by_lines, start_top_dialog
+from taurus_mafia_bot.routers.start import TopDialogSG, extract_user_identifier, format_taurons_top, split_text_by_lines, start_top_dialog, user_id_text
 from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 from taurus_mafia_bot.services.missions import MissionService
 from taurus_mafia_bot.services.roulette import RouletteService, roulette_info_text
@@ -403,6 +406,137 @@ async def test_mission_complete_awards_and_hides_from_active(tmp_path):
     assert mission_status == "completed"
     assert await missions.active_missions(1) == []
     await db.close()
+
+
+@pytest.mark.asyncio
+async def test_mission_complete_is_idempotent_after_completion(tmp_path):
+    db = Database(tmp_path / "bot.db")
+    await db.migrate()
+    await seed(db, 1)
+    economy = EconomyService(db)
+    missions = MissionService(db)
+    missions.save({"7": {"name": "Test", "description": "Proof", "reward_taurons": 4, "reward_taurcoins": 6}})
+
+    await missions.ensure_for_user(1)
+    await missions.report(1, 7, "proof")
+    assert await missions.complete(1, 7, economy) is True
+    assert await missions.complete(1, 7, economy) is False
+
+    row = await economy.profile(1)
+    assert row["taurons"] == 4
+    assert row["taurcoins"] == 6
+    assert await missions.active_missions(1) == []
+    await db.close()
+
+
+@pytest.mark.asyncio
+async def test_mission_complete_requires_reported_status(tmp_path):
+    db = Database(tmp_path / "bot.db")
+    await db.migrate()
+    await seed(db, 1)
+    economy = EconomyService(db)
+    missions = MissionService(db)
+    missions.save({"7": {"name": "Test", "description": "Proof", "reward_taurons": 4, "reward_taurcoins": 6}})
+
+    await missions.ensure_for_user(1)
+    assert await missions.complete(1, 7, economy) is False
+
+    row = await economy.profile(1)
+    assert row["taurons"] == 0
+    assert row["taurcoins"] == 0
+    assert [row["mission_id"] for row in await missions.active_missions(1)] == [7]
+    await db.close()
+
+
+def test_apply_mission_import_accepts_numbered_json_dict():
+    payload = {
+        "1": {
+            "name": "Сержант",
+            "description": "Стать комиссаром и найти мафию",
+            "reward_taurcoins": 0,
+            "reward_taurons": 2,
+        },
+        "2": {
+            "name": "Бариста",
+            "description": "Исцелить 2-х за игру",
+            "reward_taurcoins": 0,
+            "reward_taurons": 2,
+        },
+    }
+
+    imported = apply_mission_import({}, payload)
+
+    assert imported["1"]["name"] == "Сержант"
+    assert imported["2"]["reward_taurons"] == 2
+
+
+def test_mission_report_text_uses_mission_name_instead_of_id():
+    text = format_mission_report_text("🧸", 457430106, 6, {"name": "Сержант"}, None)
+
+    assert "Задание: <b>Сержант</b> (<code>6</code>)" in text
+    assert "Описание: Без описания" in text
+
+
+def test_mission_album_report_data_keeps_all_media_items():
+    messages = [
+        SimpleNamespace(photo=[SimpleNamespace(file_id="photo-1")], document=None, video=None, text=None, caption="proof"),
+        SimpleNamespace(photo=[SimpleNamespace(file_id="photo-2")], document=None, video=None, text=None, caption=None),
+    ]
+
+    data = json.loads(proof_report_data(cast(Any, messages)))
+
+    assert data["kind"] == "album"
+    assert [item["file_id"] for item in data["items"]] == ["photo-1", "photo-2"]
+    assert proof_text(cast(Any, messages)) == "proof"
+
+
+def test_id_command_helpers_match_epidemic_style():
+    assert extract_user_identifier(".ид @velunae") == "@velunae"
+    assert extract_user_identifier("/id tg://openmessage?user_id=457430106") == "457430106"
+    assert "Генетический код <code>@457430106</code>" in user_id_text(457430106, "User", "velunae")
+
+
+def test_broadcast_summary_includes_error_reasons_and_examples():
+    text = format_broadcast_summary(
+        delivered=200,
+        failed=2,
+        skipped=1,
+        reasons={"chat_not_found": 2, "invalid_user_id": 1},
+        examples={"chat_not_found": [111, 222], "invalid_user_id": [-100]},
+    )
+
+    assert "Доставлено: <code>200</code>" in text
+    assert "<code>chat_not_found</code>: <code>2</code>" in text
+    assert "<code>111, 222</code>" in text
+
+
+def utf16_offset(text: str, marker: str) -> int:
+    return len(text[: text.index(marker)].encode("utf-16-le")) // 2
+
+
+def test_extract_game_user_ids_reads_mentions_and_limits_winners_section():
+    text = (
+        "🏆 Игра окончена!\n\n"
+        "Победители:\n"
+        "Анна — 🎙 Журналист\n"
+        "Yulia👄 — 💃🏼 Любовница\n\n"
+        "Другие игроки:\n"
+        "Sasha — 🧨 Террорист\n"
+        "Visible 457430106 — 👮🏼 Сержант"
+    )
+    message = SimpleNamespace(
+        text=text,
+        caption=None,
+        entities=[
+            SimpleNamespace(offset=utf16_offset(text, "Анна"), length=4, user=SimpleNamespace(id=111111111), url=None),
+            SimpleNamespace(offset=utf16_offset(text, "Yulia"), length=5, user=None, url="tg://user?id=222222222"),
+            SimpleNamespace(offset=utf16_offset(text, "Sasha"), length=5, user=None, url="tg://openmessage?user_id=333333333"),
+        ],
+        caption_entities=None,
+    )
+
+    assert extract_game_user_ids(cast(Any, message), "победителям") == [111111111, 222222222]
+    assert extract_game_user_ids(cast(Any, message), "участникам") == [111111111, 222222222, 333333333, 457430106]
 
 
 @pytest.mark.asyncio

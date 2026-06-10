@@ -66,6 +66,12 @@ class MissionService:
         mission = self.load().get(str(mission_id))
         if not mission:
             return False
+        status = await self.db.fetch_val(
+            "SELECT status FROM user_missions WHERE user_id = ? AND mission_id = ?",
+            (user_id, mission_id),
+        )
+        if status != "reported":
+            return False
         await economy.add_taurons(user_id, int(mission.get("reward_taurons", 0)), f"mission:{mission_id}")
         await economy.add_taurcoins(user_id, int(mission.get("reward_taurcoins", 0)), f"mission:{mission_id}")
         await self.db.execute("UPDATE user_missions SET status = 'completed', timestamp = CURRENT_TIMESTAMP WHERE user_id = ? AND mission_id = ?", (user_id, mission_id))

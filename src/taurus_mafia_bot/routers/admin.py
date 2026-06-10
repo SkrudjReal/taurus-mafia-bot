@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import re
+from collections import Counter, defaultdict
+from html import escape
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -23,6 +29,108 @@ class AdminState(StatesGroup):
 
 async def is_admin_user(user_id: int, economy: EconomyService, settings: Settings) -> bool:
     return await economy.is_admin(user_id, settings)
+
+
+def classify_broadcast_error(exc: Exception) -> str:
+    message = str(exc).lower()
+    if isinstance(exc, TelegramRetryAfter):
+        return "rate_limit"
+    if isinstance(exc, TelegramForbiddenError):
+        if "bot was blocked" in message or "user is deactivated" in message:
+            return "blocked_or_deactivated"
+        return "forbidden"
+    if isinstance(exc, TelegramBadRequest):
+        if "chat not found" in message:
+            return "chat_not_found"
+        if "user not found" in message:
+            return "user_not_found"
+        if "can't parse entities" in message or "unsupported start tag" in message:
+            return "bad_html"
+        return "bad_request"
+    if isinstance(exc, TelegramAPIError):
+        return "telegram_api"
+    return type(exc).__name__
+
+
+def format_broadcast_summary(delivered: int, failed: int, skipped: int, reasons: Counter[str], examples: dict[str, list[int]]) -> str:
+    reasons = Counter(reasons)
+    lines = [
+        "<b>Рассылка завершена.</b>",
+        f"Доставлено: <code>{delivered}</code>",
+        f"Ошибок: <code>{failed}</code>",
+    ]
+    if skipped:
+        lines.append(f"Пропущено битых ID: <code>{skipped}</code>")
+    if reasons:
+        lines.append("\n<b>Причины ошибок:</b>")
+        for reason, count in reasons.most_common():
+            sample = ", ".join(str(user_id) for user_id in examples.get(reason, [])[:5])
+            sample_text = f" | примеры: <code>{escape(sample)}</code>" if sample else ""
+            lines.append(f"• <code>{escape(reason)}</code>: <code>{count}</code>{sample_text}")
+    return "\n".join(lines)
+
+
+def utf16_offset_to_index(text: str, offset: int) -> int:
+    if offset <= 0:
+        return 0
+    utf16_pos = 0
+    for index, char in enumerate(text):
+        if utf16_pos >= offset:
+            return index
+        utf16_pos += len(char.encode("utf-16-le")) // 2
+    return len(text)
+
+
+def game_scope_range(text: str, scope: str) -> tuple[int, int]:
+    lowered = text.lower()
+    winners_match = re.search(r"победител[ьи]\s*:", lowered)
+    if scope == "победителям":
+        if not winners_match:
+            return 0, len(text)
+        start = winners_match.end()
+        other_match = re.search(r"другие\s+игроки\s*:", lowered[start:])
+        end = start + other_match.start() if other_match else len(text)
+        return start, end
+    if winners_match:
+        return winners_match.end(), len(text)
+    return 0, len(text)
+
+
+def user_id_from_entity(entity: Any) -> int | None:
+    user = getattr(entity, "user", None)
+    if user is not None and getattr(user, "id", None):
+        return int(user.id)
+
+    url = getattr(entity, "url", None)
+    if not url:
+        return None
+    parsed = urlparse(str(url))
+    query = parse_qs(parsed.query)
+    for key in ("id", "user_id"):
+        values = query.get(key)
+        if values and str(values[0]).isdigit():
+            return int(values[0])
+    return None
+
+
+def extract_game_user_ids(message: Message, scope: str) -> list[int]:
+    source = message.text or message.caption or ""
+    start, end = game_scope_range(source, scope)
+    ids: set[int] = set()
+
+    for match in re.finditer(r"(?<!\d)(\d{5,15})(?!\d)", source):
+        if start <= match.start() < end:
+            ids.add(int(match.group(1)))
+
+    entities = list(message.entities or message.caption_entities or [])
+    for entity in entities:
+        entity_start = utf16_offset_to_index(source, int(getattr(entity, "offset", 0) or 0))
+        if start <= entity_start < end:
+            user_id = user_id_from_entity(entity)
+            if user_id is not None:
+                ids.add(user_id)
+
+    return sorted(ids)
 
 
 async def parse_target_and_amount(message: Message, economy: EconomyService) -> tuple[int, int]:
@@ -281,16 +389,46 @@ async def rass_send(message: Message, state: FSMContext, economy: EconomyService
     if len(text.strip()) < 3:
         await message.reply("Текст слишком короткий.")
         return
-    delivered = failed = 0
+    delivered = failed = skipped = 0
+    reasons: Counter[str] = Counter()
+    examples: dict[str, list[int]] = defaultdict(list)
     for row in await economy.all_users():
+        user_id = int(row["telegram_id"])
+        if user_id <= 0:
+            skipped += 1
+            reasons["invalid_user_id"] += 1
+            if len(examples["invalid_user_id"]) < 5:
+                examples["invalid_user_id"].append(user_id)
+            continue
         try:
-            await message.bot.send_message(row["telegram_id"], text)
+            await message.bot.send_message(user_id, text)
             delivered += 1
-        except Exception:
+        except TelegramRetryAfter as exc:
+            await asyncio.sleep(float(getattr(exc, "retry_after", 1)))
+            try:
+                await message.bot.send_message(user_id, text)
+                delivered += 1
+            except Exception as retry_exc:
+                reason = classify_broadcast_error(retry_exc)
+                reasons[reason] += 1
+                if len(examples[reason]) < 5:
+                    examples[reason].append(user_id)
+                failed += 1
+        except Exception as exc:
+            reason = classify_broadcast_error(exc)
+            reasons[reason] += 1
+            if len(examples[reason]) < 5:
+                examples[reason].append(user_id)
             failed += 1
-    await economy.db.execute("INSERT INTO broadcast_log (admin_id, text, delivered, failed) VALUES (?, ?, ?, ?)", (message.from_user.id, text, delivered, failed))
+        if (delivered + failed + skipped) % 25 == 0:
+            await asyncio.sleep(0.05)
+    summary = format_broadcast_summary(delivered, failed, skipped, reasons, examples)
+    await economy.db.execute(
+        "INSERT INTO broadcast_log (admin_id, text, delivered, failed) VALUES (?, ?, ?, ?)",
+        (message.from_user.id, f"{text}\n\n--- broadcast summary ---\n{summary}", delivered, failed),
+    )
     await state.clear()
-    await message.reply(f"<b>Рассылка завершена.</b> Доставлено: {delivered}, ошибок: {failed}.")
+    await message.reply(summary)
 
 
 @router.message(Command("cancel"))
@@ -314,14 +452,9 @@ async def give_prizes_from_game_reply(message: Message, economy: EconomyService,
     currency = "TC" if m.group(1).lower() == "тс" else "T"
     scope = m.group(2).lower()
     amount = int(m.group(3))
-    source = message.reply_to_message.text or message.reply_to_message.caption or ""
-    ids = [int(x) for x in set(re.findall(r"(?<!\d)(\d{5,15})(?!\d)", source))]
-    if scope == "победителям":
-        win_part = re.split(r"(?i)победител[ьи]:?", source, maxsplit=1)
-        if len(win_part) > 1:
-            ids = [int(x) for x in set(re.findall(r"(?<!\d)(\d{5,15})(?!\d)", win_part[1]))]
+    ids = extract_game_user_ids(message.reply_to_message, scope)
     if not ids:
-        await message.reply("Не нашла ID пользователей в сообщении игры. Нужны числовые ID.")
+        await message.reply("Не нашла ID пользователей в сообщении игры. Нужны Telegram mentions или числовые ID.")
         return
     ok = fail = 0
     for uid in ids:
