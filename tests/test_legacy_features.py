@@ -9,7 +9,7 @@ from aiogram_dialog import ShowMode, StartMode
 
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.db import Database
-from taurus_mafia_bot.routers.admin import extract_game_user_ids, format_admin_action_log, format_broadcast_summary, format_game_reward_log, format_player_transfer_log
+from taurus_mafia_bot.routers.admin import extract_game_user_ids, format_admin_action_log, format_broadcast_summary, format_game_reward_log, format_player_transfer_log, transfer_currency
 from taurus_mafia_bot.routers.missions import apply_mission_import, format_mission_report_text, proof_report_data, proof_text
 from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_spin_result, format_user_mention
 from taurus_mafia_bot.routers.shop import notify_admins, send_bonus_use_request
@@ -538,15 +538,49 @@ def test_action_log_formatters_match_requested_topics():
     transfer_log = format_player_transfer_log(target, receiver, "TC", 1)
     reward_log = format_game_reward_log(admin, [target, receiver], "TC", 2, "победителям")
 
-    assert "Админ: 1792913275 (Ü (@yaosseef))" in admin_log
-    assert "Пользователь: 803090264 (𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚 (@amiyshka))" in admin_log
+    assert "Админ: <code>1792913275</code> (Ü (@yaosseef))" in admin_log
+    assert "Пользователь: <code>803090264</code> (𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚 (@amiyshka))" in admin_log
     assert "Действие: Выдача Taurons" in admin_log
-    assert "Пользователь 1: 803090264 (𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚 (@amiyshka))" in transfer_log
+    assert "Пользователь 1: <code>803090264</code> (𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚 (@amiyshka))" in transfer_log
+    assert "Пользователь 2: <code>8403355074</code> (Alona (@I_snagovskyaya))" in transfer_log
     assert "Действие: Передача Taurcoins" in transfer_log
     assert "Детали: 1TC" in transfer_log
     assert 'tg://openmessage?user_id=1792913275' in reward_log
     assert "выдал(а) по 2 ТС 🌟 победителям (2 чел.)" in reward_log
     assert 'tg://openmessage?user_id=803090264' in reward_log
+
+
+@pytest.mark.asyncio
+async def test_admin_transfer_command_logs_only_to_player_topic(tmp_path):
+    db = Database(tmp_path / "bot.db")
+    await db.migrate()
+    await seed(db, 1, taurons=5, full_name="Admin", username="admin")
+    await seed(db, 2, taurons=0, full_name="Player", username="player")
+    economy = EconomyService(db)
+    bot = FakeBot()
+    replies = []
+    message = SimpleNamespace(
+        text="/муу 2",
+        from_user=SimpleNamespace(id=1),
+        reply_to_message=SimpleNamespace(from_user=SimpleNamespace(id=2)),
+        bot=bot,
+        reply=lambda *args, **kwargs: None,
+    )
+
+    async def reply(*args, **kwargs):
+        replies.append((args, kwargs))
+
+    message.reply = reply
+    settings = Settings(BOT_TOKEN="123456:REALISH", OWNER_ID=1, ADMIN_IDS="1")
+
+    await transfer_currency(cast(Any, message), economy, settings, "T")
+
+    assert len(bot.messages) == 1
+    assert bot.messages[0][1]["message_thread_id"] == 2217
+    assert bot.messages[0][1]["message_thread_id"] != 2213
+    assert await db.fetch_val("SELECT taurons FROM users WHERE telegram_id = 1") == 3
+    assert await db.fetch_val("SELECT taurons FROM users WHERE telegram_id = 2") == 2
+    await db.close()
 
 
 def utf16_offset(text: str, marker: str) -> int:

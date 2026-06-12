@@ -45,7 +45,7 @@ def currency_short_ru(currency: str) -> str:
 
 def user_identity(user_id: int, full_name: str | None, username: str | None) -> str:
     username_part = f" (@{escape(username)})" if username else ""
-    return f"{user_id} ({escape(full_name or str(user_id))}{username_part})"
+    return f"<code>{user_id}</code> ({escape(full_name or str(user_id))}{username_part})"
 
 
 def user_identity_from_row(row) -> str:
@@ -333,8 +333,6 @@ async def transfer_currency(message: Message, economy: EconomyService, settings:
     if sender_row is not None and receiver_row is not None:
         transfer_log = format_player_transfer_log(sender_row, receiver_row, currency, amount)
         await send_player_action_log(message, settings, transfer_log)
-        if await is_admin_user(message.from_user.id, economy, settings):
-            await send_admin_action_log(message, settings, transfer_log)
     await message.reply(f"<b>Успешная передача:</b> {amount}{currency} → <code>{receiver_id}</code>")
 
 
