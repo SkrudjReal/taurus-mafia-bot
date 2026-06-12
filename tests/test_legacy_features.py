@@ -9,11 +9,11 @@ from aiogram_dialog import ShowMode, StartMode
 
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.db import Database
-from taurus_mafia_bot.routers.admin import extract_game_user_ids, format_broadcast_summary
+from taurus_mafia_bot.routers.admin import extract_game_user_ids, format_admin_action_log, format_broadcast_summary, format_game_reward_log, format_player_transfer_log
 from taurus_mafia_bot.routers.missions import apply_mission_import, format_mission_report_text, proof_report_data, proof_text
-from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_user_mention
+from taurus_mafia_bot.routers.roulette import format_admin_spin_result, format_spin_result, format_user_mention
 from taurus_mafia_bot.routers.shop import notify_admins, send_bonus_use_request
-from taurus_mafia_bot.routers.start import TopDialogSG, extract_user_identifier, format_taurons_top, split_text_by_lines, start_top_dialog, user_id_text
+from taurus_mafia_bot.routers.start import TopDialogSG, extract_user_identifier, format_taurons_top, split_text_by_lines, start_top_dialog, user_info_text
 from taurus_mafia_bot.services.economy import EconomyError, EconomyService
 from taurus_mafia_bot.services.missions import MissionService
 from taurus_mafia_bot.services.roulette import RouletteService, roulette_info_text
@@ -242,6 +242,10 @@ def test_settings_default_log_topics_match_legacy_bot_py() -> None:
 
     assert settings.log_chat_id == -1003333957923
     assert settings.log_thread_id == 2215
+    assert settings.admin_action_log_chat_id == -1003333957923
+    assert settings.admin_action_log_thread_id == 2213
+    assert settings.player_action_log_chat_id == -1003333957923
+    assert settings.player_action_log_thread_id == 2217
     assert settings.roulette_log_chat_id == -1003333957923
     assert settings.roulette_log_thread_id == 18657
     assert settings.bonus_request_log_chat_id == -1003333957923
@@ -493,7 +497,22 @@ def test_mission_album_report_data_keeps_all_media_items():
 def test_id_command_helpers_match_epidemic_style():
     assert extract_user_identifier(".ид @velunae") == "@velunae"
     assert extract_user_identifier("/id tg://openmessage?user_id=457430106") == "457430106"
-    assert "Генетический код <code>@457430106</code>" in user_id_text(457430106, "User", "velunae")
+    text = user_info_text(
+        user_id=457430106,
+        full_name="шома",
+        username="shominaaa",
+        is_admin=False,
+        taurons=44,
+        taurcoins=13,
+    )
+
+    assert "Информация о пользователе" in text
+    assert "Имя: шома" in text
+    assert "ID: <code>457430106</code>" in text
+    assert "Юзернейм: @shominaaa" in text
+    assert "Админ: Нет" in text
+    assert "Баланс Taurons: <code>44</code>" in text
+    assert "Баланс Taurcoins: <code>13</code>" in text
 
 
 def test_broadcast_summary_includes_error_reasons_and_examples():
@@ -508,6 +527,26 @@ def test_broadcast_summary_includes_error_reasons_and_examples():
     assert "Доставлено: <code>200</code>" in text
     assert "<code>chat_not_found</code>: <code>2</code>" in text
     assert "<code>111, 222</code>" in text
+
+
+def test_action_log_formatters_match_requested_topics():
+    admin = SimpleNamespace(id=1792913275, full_name="Ü", username="yaosseef")
+    target = {"telegram_id": 803090264, "full_name": "𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚", "username": "amiyshka"}
+    receiver = {"telegram_id": 8403355074, "full_name": "Alona", "username": "I_snagovskyaya"}
+
+    admin_log = format_admin_action_log(admin, target, "Выдача Taurons", "1Т")
+    transfer_log = format_player_transfer_log(target, receiver, "TC", 1)
+    reward_log = format_game_reward_log(admin, [target, receiver], "TC", 2, "победителям")
+
+    assert "Админ: 1792913275 (Ü (@yaosseef))" in admin_log
+    assert "Пользователь: 803090264 (𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚 (@amiyshka))" in admin_log
+    assert "Действие: Выдача Taurons" in admin_log
+    assert "Пользователь 1: 803090264 (𝐀𝐦𝐢𝐲𝐬𝐡𝐤𝐚 (@amiyshka))" in transfer_log
+    assert "Действие: Передача Taurcoins" in transfer_log
+    assert "Детали: 1TC" in transfer_log
+    assert 'tg://openmessage?user_id=1792913275' in reward_log
+    assert "выдал(а) по 2 ТС 🌟 победителям (2 чел.)" in reward_log
+    assert 'tg://openmessage?user_id=803090264' in reward_log
 
 
 def utf16_offset(text: str, marker: str) -> int:
@@ -600,6 +639,20 @@ def test_roulette_admin_notification_uses_user_mention():
 
     assert 'Пользователь: <a href="tg://user?id=1224362805">Scrooge</a>' in text
     assert "Пользователь: <code>1224362805</code>" not in text
+    assert "Прокрут: <code>10</code>" in text
+
+
+def test_roulette_user_notification_hides_spin_number():
+    result = SimpleNamespace(
+        spin_number=41,
+        prize=SimpleNamespace(code="remove_warn", name="Снять варн", description="Удалить одно предупреждение у пользователя"),
+        guaranteed=False,
+    )
+
+    text = format_spin_result(result)
+
+    assert "Прокрут #41" not in text
+    assert "Вы выиграли: <b>Снять варн</b>" in text
 
 
 @pytest.mark.asyncio

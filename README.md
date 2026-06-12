@@ -47,6 +47,7 @@
 - `/tc @user/ID сумма` или `/tc сумма` реплаем — выдать/списать `TC`.
 - `/apanel` — админ-панель.
 - `/admin @user/ID` — переключить админку пользователю, доступно владельцу.
+- `/adm @user/ID` — алиас команды `/admin`.
 - `/users` — список пользователей.
 - `/user @user/ID` — карточка пользователя.
 - `/rass` — текстовая рассылка всем зарегистрированным пользователям с диагностикой ошибок доставки.
@@ -64,6 +65,8 @@
 - Покупка списывает `T` и добавляет бонус в `user_prizes`.
 - Покупка бонусов отправляет уведомление только в дефолтный лог-топик `LOG_CHAT_ID`/`LOG_THREAD_ID`.
 - Заявки на использование бонусов отправляются только в отдельный топик `BONUS_REQUEST_LOG_CHAT_ID`/`BONUS_REQUEST_LOG_THREAD_ID`.
+- Админские действия (`/tm`, `/tc`, `/admin`, `/adm`, массовая выдача по игре) логируются в `ADMIN_ACTION_LOG_CHAT_ID`/`ADMIN_ACTION_LOG_THREAD_ID`.
+- Пользовательские передачи (`/муу`, `/буи`) логируются в `PLAYER_ACTION_LOG_CHAT_ID`/`PLAYER_ACTION_LOG_THREAD_ID`.
 
 ## Рулетка
 
@@ -90,6 +93,10 @@ OWNER_ID=telegram_id_главного_админа
 ADMIN_IDS=telegram_id_главного_админа,telegram_id_ещё_админа
 LOG_CHAT_ID=-1003333957923
 LOG_THREAD_ID=2215
+ADMIN_ACTION_LOG_CHAT_ID=-1003333957923
+ADMIN_ACTION_LOG_THREAD_ID=2213
+PLAYER_ACTION_LOG_CHAT_ID=-1003333957923
+PLAYER_ACTION_LOG_THREAD_ID=2217
 ROULETTE_LOG_CHAT_ID=-1003333957923
 ROULETTE_LOG_THREAD_ID=18657
 BONUS_REQUEST_LOG_CHAT_ID=-1003333957923

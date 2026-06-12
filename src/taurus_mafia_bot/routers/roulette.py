@@ -58,8 +58,7 @@ def format_spin_result(result: RouletteResult) -> str:
     prefix = "<b>Гарантированный приз!</b>\n" if result.guaranteed else ""
     prize_name = RouletteService.prize_display_name(result.prize, result.spin_number)
     return (
-        f"{prefix}<b>Прокрут #{result.spin_number}</b>\n"
-        f"Вы выиграли: <b>{prize_name}</b>\n"
+        f"{prefix}Вы выиграли: <b>{prize_name}</b>\n"
         f"<i>{result.prize.description}</i>"
     )
 

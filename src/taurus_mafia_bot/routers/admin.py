@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramFor
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
 from taurus_mafia_bot.config import Settings
 from taurus_mafia_bot.keyboards import admin_panel_keyboard, back_keyboard
@@ -29,6 +29,94 @@ class AdminState(StatesGroup):
 
 async def is_admin_user(user_id: int, economy: EconomyService, settings: Settings) -> bool:
     return await economy.is_admin(user_id, settings)
+
+
+def currency_name(currency: str) -> str:
+    return "Taurons" if currency == "T" else "Taurcoins"
+
+
+def currency_amount(amount: int, currency: str) -> str:
+    return f"{amount}Т" if currency == "T" else f"{amount}TC"
+
+
+def currency_short_ru(currency: str) -> str:
+    return "Т" if currency == "T" else "ТС"
+
+
+def user_identity(user_id: int, full_name: str | None, username: str | None) -> str:
+    username_part = f" (@{escape(username)})" if username else ""
+    return f"{user_id} ({escape(full_name or str(user_id))}{username_part})"
+
+
+def user_identity_from_row(row) -> str:
+    return user_identity(int(row["telegram_id"]), row["full_name"], row["username"])
+
+
+def user_identity_from_aiogram(user: User) -> str:
+    return user_identity(user.id, user.full_name, user.username)
+
+
+def user_openmessage_link(user_id: int, label: str | None) -> str:
+    return f'<a href="tg://openmessage?user_id={user_id}">{escape(label or str(user_id))}</a>'
+
+
+def user_openmessage_link_from_row(row) -> str:
+    label = f"@{row['username']}" if row["username"] else row["full_name"]
+    return user_openmessage_link(int(row["telegram_id"]), label)
+
+
+def user_openmessage_link_from_aiogram(user: User) -> str:
+    label = f"@{user.username}" if user.username else user.full_name
+    return user_openmessage_link(user.id, label)
+
+
+async def send_topic_log(bot, chat_id: int | None, thread_id: int | None, text: str) -> None:
+    if not chat_id:
+        return
+    kwargs = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+    if thread_id:
+        kwargs["message_thread_id"] = thread_id
+    try:
+        await bot.send_message(**kwargs)
+    except Exception:
+        pass
+
+
+async def send_admin_action_log(message: Message, settings: Settings, text: str) -> None:
+    await send_topic_log(message.bot, settings.admin_action_log_chat_id, settings.admin_action_log_thread_id, text)
+
+
+async def send_player_action_log(message: Message, settings: Settings, text: str) -> None:
+    await send_topic_log(message.bot, settings.player_action_log_chat_id, settings.player_action_log_thread_id, text)
+
+
+def format_admin_action_log(admin: User, target_row, action: str, details: str) -> str:
+    return (
+        "[LOG]\n"
+        f"Админ: {user_identity_from_aiogram(admin)}\n"
+        f"Пользователь: {user_identity_from_row(target_row)}\n"
+        f"Действие: {escape(action)}\n"
+        f"Детали: {escape(details)}"
+    )
+
+
+def format_player_transfer_log(sender_row, receiver_row, currency: str, amount: int) -> str:
+    return (
+        "[LOG]\n"
+        f"Пользователь 1: {user_identity_from_row(sender_row)}\n"
+        f"Пользователь 2: {user_identity_from_row(receiver_row)}\n"
+        f"Действие: Передача {currency_name(currency)}\n"
+        f"Детали: {currency_amount(amount, currency)}"
+    )
+
+
+def format_game_reward_log(admin: User, recipient_rows: list, currency: str, amount: int, scope: str) -> str:
+    recipients = "\n".join(user_openmessage_link_from_row(row) for row in recipient_rows) or "нет"
+    return (
+        f"{user_openmessage_link_from_aiogram(admin)} выдал(а) по {amount} {currency_short_ru(currency)} 🌟 {scope} "
+        f"({len(recipient_rows)} чел.)\n\n"
+        f"Получатели:\n{recipients}"
+    )
 
 
 def classify_broadcast_error(exc: Exception) -> str:
@@ -152,6 +240,7 @@ async def grant_currency(message: Message, economy: EconomyService, settings: Se
     if not await is_admin_user(message.from_user.id, economy, settings):
         await message.reply("<b>У тебя нет доступа к этой команде.</b>")
         return
+    await economy.ensure_user(message.from_user, is_admin=message.from_user.id in settings.admin_ids)
     try:
         target_id, amount = await parse_target_and_amount(message, economy)
         if currency == "T":
@@ -161,6 +250,18 @@ async def grant_currency(message: Message, economy: EconomyService, settings: Se
     except EconomyError as exc:
         await message.reply(f"<b>Ошибка:</b> {exc}")
         return
+    target_row = await economy.profile(target_id)
+    if target_row is not None:
+        await send_admin_action_log(
+            message,
+            settings,
+            format_admin_action_log(
+                message.from_user,
+                target_row,
+                f"Выдача {currency_name(currency)}",
+                currency_amount(amount, currency),
+            ),
+        )
     await message.reply(f"<b>Успешно выдано {amount}{currency} пользователю <code>{target_id}</code>.</b>")
 
 
@@ -174,7 +275,7 @@ async def give_taurcoins_admin(message: Message, economy: EconomyService, settin
     await grant_currency(message, economy, settings, "TC")
 
 
-@router.message(Command("admin"))
+@router.message(Command("admin", "adm"))
 async def manage_admin(message: Message, economy: EconomyService, settings: Settings) -> None:
     assert message.from_user is not None
     if message.from_user.id != settings.owner_id:
@@ -190,6 +291,18 @@ async def manage_admin(message: Message, economy: EconomyService, settings: Sett
         return
     new_value = not bool(row["is_admin"])
     await economy.set_admin(row["telegram_id"], new_value)
+    updated_row = await economy.profile(row["telegram_id"])
+    if updated_row is not None:
+        await send_admin_action_log(
+            message,
+            settings,
+            format_admin_action_log(
+                message.from_user,
+                updated_row,
+                "Выдача админки" if new_value else "Снятие админки",
+                "Админ: Да" if new_value else "Админ: Нет",
+            ),
+        )
     await message.reply(f"Админка для <code>{row['telegram_id']}</code>: {'выдана' if new_value else 'снята'}.")
 
 
@@ -207,7 +320,7 @@ async def parse_transfer_target_and_amount(message: Message, economy: EconomySer
     return int(row["telegram_id"]), int(parts[2])
 
 
-async def transfer_currency(message: Message, economy: EconomyService, currency: str) -> None:
+async def transfer_currency(message: Message, economy: EconomyService, settings: Settings, currency: str) -> None:
     assert message.from_user is not None
     try:
         receiver_id, amount = await parse_transfer_target_and_amount(message, economy)
@@ -215,17 +328,24 @@ async def transfer_currency(message: Message, economy: EconomyService, currency:
     except EconomyError as exc:
         await message.reply(f"<b>Ошибка:</b> {exc}")
         return
+    sender_row = await economy.profile(message.from_user.id)
+    receiver_row = await economy.profile(receiver_id)
+    if sender_row is not None and receiver_row is not None:
+        transfer_log = format_player_transfer_log(sender_row, receiver_row, currency, amount)
+        await send_player_action_log(message, settings, transfer_log)
+        if await is_admin_user(message.from_user.id, economy, settings):
+            await send_admin_action_log(message, settings, transfer_log)
     await message.reply(f"<b>Успешная передача:</b> {amount}{currency} → <code>{receiver_id}</code>")
 
 
 @router.message(Command("муу"))
-async def transfer_taurons(message: Message, economy: EconomyService) -> None:
-    await transfer_currency(message, economy, "T")
+async def transfer_taurons(message: Message, economy: EconomyService, settings: Settings) -> None:
+    await transfer_currency(message, economy, settings, "T")
 
 
 @router.message(Command("буи"))
-async def transfer_taurcoins(message: Message, economy: EconomyService) -> None:
-    await transfer_currency(message, economy, "TC")
+async def transfer_taurcoins(message: Message, economy: EconomyService, settings: Settings) -> None:
+    await transfer_currency(message, economy, settings, "TC")
 
 
 @router.message(F.text.regexp(r"^[-–—]прокрут(?:\s|$)"))
@@ -457,13 +577,26 @@ async def give_prizes_from_game_reply(message: Message, economy: EconomyService,
         await message.reply("Не нашла ID пользователей в сообщении игры. Нужны Telegram mentions или числовые ID.")
         return
     ok = fail = 0
+    successful_ids: list[int] = []
     for uid in ids:
         try:
             if currency == "T":
                 await economy.add_taurons(uid, amount, f"game_reward:{scope}")
             else:
                 await economy.add_taurcoins(uid, amount, f"game_reward:{scope}")
+            successful_ids.append(uid)
             ok += 1
         except EconomyError:
             fail += 1
+    recipient_rows = []
+    for uid in successful_ids:
+        row = await economy.profile(uid)
+        if row is not None:
+            recipient_rows.append(row)
+    if recipient_rows:
+        await send_admin_action_log(
+            message,
+            settings,
+            format_game_reward_log(message.from_user, recipient_rows, currency, amount, scope),
+        )
     await message.reply(f"Начислено {amount}{currency}: успешно {ok}, ошибок {fail}.")

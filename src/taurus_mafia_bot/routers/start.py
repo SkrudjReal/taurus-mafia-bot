@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from html import escape
+from typing import Any
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -107,6 +108,7 @@ HELP_TEXT = """
 <code>/tm сумма</code> / <code>/tc сумма</code> - выдача реплаем
 <code>/apanel</code> - открыть админ-панель
 <code>/admin @user/ID</code> - выдать или снять админку
+<code>/adm @user/ID</code> - алиас команды <code>/admin</code>
 <code>/rass</code> - создать текстовую рассылку
 <code>/users</code> - список пользователей
 <code>/user @user/ID</code> - карточка пользователя
@@ -165,15 +167,42 @@ def extract_user_identifier(text: str) -> str | None:
     return None
 
 
-def user_id_text(user_id: int, full_name: str | None, username: str | None = None) -> str:
-    display = escape(full_name or username or str(user_id))
-    mention = f'<a href="tg://openmessage?user_id={user_id}">{display}</a>'
-    username_line = f"\nUsername: @{escape(username)}" if username else ""
-    return f"🌀 Генетический код <code>@{user_id}</code> игрока «<b>{mention}</b>»{username_line}"
+def user_info_text(
+    *,
+    user_id: int,
+    full_name: str | None,
+    username: str | None,
+    is_admin: bool,
+    taurons: int,
+    taurcoins: int,
+) -> str:
+    username_text = f"@{escape(username)}" if username else "Нет"
+    return (
+        "Информация о пользователе\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"Имя: {escape(full_name or str(user_id))}\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Юзернейм: {username_text}\n"
+        f"Админ: {'Да' if is_admin else 'Нет'}\n"
+        f"Баланс Taurons: <code>{taurons}</code>\n"
+        f"Баланс Taurcoins: <code>{taurcoins}</code>"
+    )
+
+
+async def user_info_text_from_row(row: Any, economy: EconomyService, settings: Settings) -> str:
+    user_id = int(row["telegram_id"])
+    return user_info_text(
+        user_id=user_id,
+        full_name=row["full_name"],
+        username=row["username"],
+        is_admin=await economy.is_admin(user_id, settings),
+        taurons=int(row["taurons"]),
+        taurcoins=int(row["taurcoins"]),
+    )
 
 
 @router.message(F.text.regexp(r"(?i)^[!./](ид|id)(?:@\w+)?(?:\s+.+)?$"))
-async def get_user_id(message: Message, economy: EconomyService) -> None:
+async def get_user_id(message: Message, economy: EconomyService, settings: Settings) -> None:
     assert message.from_user is not None
     identifier = extract_user_identifier(message.text or "")
     if identifier:
@@ -181,14 +210,13 @@ async def get_user_id(message: Message, economy: EconomyService) -> None:
         if row is None:
             await message.answer("📝 Пользователь не найден в базе.")
             return
-        await message.answer(
-            user_id_text(int(row["telegram_id"]), str(row["full_name"]), row["username"]),
-            disable_web_page_preview=True,
-        )
+        await message.answer(await user_info_text_from_row(row, economy, settings), disable_web_page_preview=True)
         return
 
     target = message.reply_to_message.from_user if message.reply_to_message and message.reply_to_message.from_user else message.from_user
-    await message.answer(user_id_text(target.id, target.full_name, target.username), disable_web_page_preview=True)
+    await economy.ensure_user(target, is_admin=target.id in settings.admin_ids)
+    row = await economy.profile(target.id)
+    await message.answer(await user_info_text_from_row(row, economy, settings), disable_web_page_preview=True)
 
 
 @router.message(Command("dev", "developer"))
